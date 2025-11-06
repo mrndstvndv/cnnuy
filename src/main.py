@@ -400,14 +400,6 @@ class EmotionDetectionApp(ctk.CTk):
         )
         self.smoothing_label.pack(side="left")
         
-        # Voice button
-        if self.detector.recognizer:
-            self.voice_btn = ctk.CTkButton(
-                analysis_frame, text="🎤 Voice Input", 
-                command=self.voice_input, height=35
-            )
-            self.voice_btn.pack(pady=10)
-        
         # ===== RIGHT PANEL: AI CHAT =====
         chat_frame = ctk.CTkFrame(self)
         chat_frame.grid(row=1, column=2, sticky="nsew", padx=(5, 10), pady=5)
@@ -488,6 +480,20 @@ class EmotionDetectionApp(ctk.CTk):
         # Chat input
         chat_input_frame = ctk.CTkFrame(chat_frame, fg_color="transparent")
         chat_input_frame.pack(fill="x", padx=10, pady=5)
+        
+        if self.detector.recognizer:
+            # Ghost-style icon button for voice capture
+            self.voice_btn = ctk.CTkButton(
+                chat_input_frame,
+                text="🎤",
+                width=40,
+                height=36,
+                command=self.voice_input,
+                fg_color="transparent",
+                hover_color=("gray75", "gray25"),
+                corner_radius=8
+            )
+            self.voice_btn.pack(side="left", padx=(0, 6))
         
         self.chat_input = ctk.CTkEntry(
             chat_input_frame, placeholder_text="Type your message...",
@@ -1938,4 +1944,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
