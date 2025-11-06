@@ -872,6 +872,7 @@ class EmotionDetectionApp(ctk.CTk):
     
     def voice_input(self):
         """Capture voice input and send to AI chatbot"""
+        self.stop_speaking()
         if self.is_voice_recording:
             return  # Already recording
         
@@ -905,6 +906,7 @@ class EmotionDetectionApp(ctk.CTk):
     
     def _send_voice_message_to_ai(self, message: str):
         """Send voice-transcribed message to AI and get response with TTS"""
+        self.stop_speaking()
         def get_response():
             response = self.chatbot.send_message(message, self.current_emotion)
             self.add_chat_message(f"🤖 AI: {response}", "ai")
@@ -931,6 +933,29 @@ class EmotionDetectionApp(ctk.CTk):
             self._speak_pyttsx3(text)
         else:
             print("⚠️ No TTS engine available")
+            self.is_speaking = False
+            self.status_label.configure(text="Ready")
+    
+    def stop_speaking(self):
+        """Stop any ongoing TTS playback and reset status"""
+        stop_requested = False
+        
+        if AUDIO_AVAILABLE and pygame.mixer.get_init():
+            try:
+                if pygame.mixer.music.get_busy():
+                    pygame.mixer.music.stop()
+                    stop_requested = True
+            except Exception:
+                pass
+        
+        if self.tts_engine:
+            try:
+                self.tts_engine.stop()
+                stop_requested = True
+            except Exception:
+                pass
+        
+        if self.is_speaking or stop_requested:
             self.is_speaking = False
             self.status_label.configure(text="Ready")
     
@@ -1017,6 +1042,7 @@ class EmotionDetectionApp(ctk.CTk):
     
     def send_message(self):
         """Send message to AI chatbot"""
+        self.stop_speaking()
         message = self.chat_input.get().strip()
         
         if not message:
