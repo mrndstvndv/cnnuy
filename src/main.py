@@ -9,6 +9,7 @@ from PIL import Image
 import threading
 import json
 import os
+import time
 from datetime import datetime
 from typing import Optional
 import tkinter as tk
@@ -20,6 +21,15 @@ import numpy as np
 
 from detector import EmotionDetector
 from gemini_chatbot import GeminiChatbot
+
+# Optional speech recognition (used for manual mic control)
+try:
+    import speech_recognition as sr
+    SPEECH_RECOGNITION_AVAILABLE = True
+except ImportError:
+    sr = None
+    SPEECH_RECOGNITION_AVAILABLE = False
+    print("⚠️ SpeechRecognition not available - advanced voice capture disabled")
 
 # Try to import pygame for audio playback
 try:
@@ -95,6 +105,9 @@ class EmotionDetectionApp(ctk.CTk):
         # Voice-to-text chat
         self.is_voice_recording = False
         self.voice_thread = None
+        self.voice_stop_event = None
+        self.voice_processing = False
+        self.voice_max_duration = 10  # seconds
         
         # ElevenLabs TTS
         self.elevenlabs_api_key = self.detector.config.get("elevenlabs_api_key", "")
@@ -833,8 +846,8 @@ class EmotionDetectionApp(ctk.CTk):
                 self.status_label.configure(text="🔇 Voice stopped by gesture!")
                 self.add_chat_message("🔇 Voice playback stopped", "system")
             elif self.is_voice_recording:
-                # Can't really stop recording mid-stream with current implementation
-                self.add_chat_message("⏸️ Voice recording will stop automatically", "system")
+                self.voice_input()
+                self.status_label.configure(text="🔄 Voice processing triggered by gesture!")
             self.last_gesture_action_time = current_time
             self.gesture_history.clear()
         
@@ -871,38 +884,138 @@ class EmotionDetectionApp(ctk.CTk):
         )
     
     def voice_input(self):
-        """Capture voice input and send to AI chatbot"""
+        """Toggle voice input capture for the Gemini chat"""
+        if not self.detector.recognizer or not SPEECH_RECOGNITION_AVAILABLE:
+            self.add_chat_message(
+                "❌ Voice input is unavailable on this system.",
+                "system",
+                color="red"
+            )
+            return
+        
+        if not self.is_voice_recording:
+            self._start_voice_recording()
+        else:
+            self._stop_voice_recording()
+    
+    def _start_voice_recording(self):
+        """Begin capturing audio from the microphone"""
         self.stop_speaking()
-        if self.is_voice_recording:
-            return  # Already recording
+        if self.voice_thread and self.voice_thread.is_alive():
+            return
         
         self.is_voice_recording = True
+        self.voice_processing = False
+        self.voice_stop_event = threading.Event()
         self.status_label.configure(text="🎤 Listening...")
-        if hasattr(self, 'voice_btn'):
-            self.voice_btn.configure(state="disabled")
         
-        # Show in chat
+        if hasattr(self, 'voice_btn'):
+            self.voice_btn.configure(text="⏹", state="normal")
+        
         self.add_chat_message("🎤 Voice recording started... Speak now!", "system", color="blue")
         
-        def listen():
-            text = self.detector.listen_voice(duration=10)  # Listen for up to 10 seconds
-            
-            if text:
-                # Show transcription
-                self.add_chat_message(f"📝 You said: {text}", "user")
-                
-                # Send to chatbot automatically
-                self.after(100, lambda: self._send_voice_message_to_ai(text))
-            else:
-                self.add_chat_message("❌ No speech detected or could not understand", "system", color="red")
-            
-            self.is_voice_recording = False
-            self.status_label.configure(text="Ready")
-            if hasattr(self, 'voice_btn'):
-                self.voice_btn.configure(state="normal")
-        
-        self.voice_thread = threading.Thread(target=listen, daemon=True)
+        self.voice_thread = threading.Thread(target=self._capture_voice_audio, daemon=True)
         self.voice_thread.start()
+    
+    def _stop_voice_recording(self):
+        """Signal the current recording to stop and start processing"""
+        if not self.voice_stop_event:
+            return
+        
+        self.voice_stop_event.set()
+        self._prepare_voice_processing()
+    
+    def _prepare_voice_processing(self):
+        """Update UI to indicate voice processing state"""
+        if self.voice_processing:
+            return
+        
+        self.voice_processing = True
+        self.status_label.configure(text="🔄 Processing voice...")
+        if hasattr(self, 'voice_btn'):
+            self.voice_btn.configure(state="disabled")
+    
+    def _capture_voice_audio(self):
+        """Background task to record audio frames until stopped"""
+        transcript = None
+        error_text = None
+        frames = []
+        sample_rate = None
+        sample_width = None
+        
+        recognizer = self.detector.recognizer
+        
+        try:
+            with sr.Microphone() as source:
+                try:
+                    recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                except Exception:
+                    pass
+                
+                sample_rate = getattr(source, "SAMPLE_RATE", 16000)
+                sample_width = getattr(source, "SAMPLE_WIDTH", 2)
+                
+                start_time = time.time()
+                while not self.voice_stop_event.is_set():
+                    if self.voice_max_duration and (time.time() - start_time) >= self.voice_max_duration:
+                        self.voice_stop_event.set()
+                        break
+                    
+                    try:
+                        try:
+                            chunk = source.stream.read(source.CHUNK, exception_on_overflow=False)
+                        except TypeError:
+                            chunk = source.stream.read(source.CHUNK)
+                        frames.append(chunk)
+                    except Exception as exc:
+                        print(f"⚠️ Voice capture chunk error: {exc}")
+                        break
+                
+                self.after(0, self._prepare_voice_processing)
+        except Exception as exc:
+            print(f"❌ Voice capture error: {exc}")
+            error_text = "Could not access the microphone. Please check your audio settings."
+        
+        audio_data = None
+        if frames and sample_rate and sample_width and sr:
+            audio_data = sr.AudioData(b"".join(frames), sample_rate, sample_width)
+        
+        if audio_data:
+            try:
+                transcript = recognizer.recognize_google(audio_data)
+            except sr.UnknownValueError:
+                transcript = None
+            except sr.RequestError as exc:
+                print(f"❌ Speech recognition error: {exc}")
+                error_text = "Speech recognition service is unavailable right now."
+            except Exception as exc:
+                print(f"❌ Unexpected speech recognition error: {exc}")
+                error_text = "Could not process the recorded audio."
+        elif not error_text:
+            error_text = "No speech detected or the recording was too short."
+        
+        self.after(0, lambda: self._finalize_voice_recording(transcript, error_text))
+    
+    def _finalize_voice_recording(self, transcript: Optional[str], error_text: Optional[str]):
+        """Restore UI state after recording and handle transcription output"""
+        self.is_voice_recording = False
+        self.voice_processing = False
+        self.voice_stop_event = None
+        self.voice_thread = None
+        
+        self.status_label.configure(text="Ready")
+        if hasattr(self, 'voice_btn'):
+            self.voice_btn.configure(text="🎤", state="normal")
+        
+        if error_text and not transcript:
+            self.add_chat_message(f"❌ {error_text}", "system", color="red")
+            return
+        
+        if transcript:
+            self.add_chat_message(f"📝 You said: {transcript}", "user")
+            self.after(100, lambda: self._send_voice_message_to_ai(transcript))
+        else:
+            self.add_chat_message("❌ No speech detected or could not understand", "system", color="red")
     
     def _send_voice_message_to_ai(self, message: str):
         """Send voice-transcribed message to AI and get response with TTS"""
