@@ -1058,6 +1058,9 @@ class EmotionDetectionApp(ctk.CTk):
         def get_response():
             response = self.chatbot.send_message(message, self.current_emotion)
             self.add_chat_message(f"AI: {response}", "ai")
+            
+            if self.tts_enabled and (self.elevenlabs_api_key or self.tts_engine):
+                self.speak_text(response)
         
         threading.Thread(target=get_response, daemon=True).start()
     
