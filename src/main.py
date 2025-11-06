@@ -16,6 +16,7 @@ from tkinter import filedialog, messagebox
 from pathlib import Path
 import requests
 import io
+import numpy as np
 
 from detector import EmotionDetector
 from gemini_chatbot import GeminiChatbot
@@ -73,6 +74,10 @@ class EmotionDetectionApp(ctk.CTk):
         self.current_gesture = "none"
         self.current_motion = "static"
         
+        # Input source mode
+        self.input_mode = "webcam"  # webcam or image
+        self.uploaded_image = None
+        
         # Brightness control
         self.brightness = 0  # -100 to +100
         self.last_gesture_action_time = 0
@@ -82,8 +87,8 @@ class EmotionDetectionApp(ctk.CTk):
         self.gesture_history = []
         self.gesture_stability_frames = 5  # Require same gesture for 5 frames
         
-        # AI Vision auto-analysis
-        self.auto_analysis_enabled = False
+        # AI Vision auto-analysis (enabled by default)
+        self.auto_analysis_enabled = True
         self.last_analysis_time = 0
         self.analysis_interval = 30  # seconds between auto-analysis
         
@@ -94,7 +99,7 @@ class EmotionDetectionApp(ctk.CTk):
         # ElevenLabs TTS
         self.elevenlabs_api_key = self.detector.config.get("elevenlabs_api_key", "")
         self.is_speaking = False
-        self.tts_enabled = True  # Toggle for TTS
+        self.tts_enabled = False  # Toggle for TTS - default OFF
         self.use_elevenlabs = False  # Will be set to True if API key works
         self.elevenlabs_status = "unknown"  # unknown, working, no_permission, quota_exceeded, error
         
@@ -200,8 +205,8 @@ class EmotionDetectionApp(ctk.CTk):
         
         # Upload button
         self.upload_btn = ctk.CTkButton(
-            control_frame, text="🖼️ Upload", command=self.upload_image,
-            width=100, height=35
+            control_frame, text="🖼️ Upload Image", command=self.upload_image,
+            width=130, height=35
         )
         self.upload_btn.pack(side="left", padx=5)
         
@@ -212,8 +217,8 @@ class EmotionDetectionApp(ctk.CTk):
         )
         self.ai_vision_btn.pack(side="left", padx=5)
         
-        # Gesture detection toggle
-        self.gesture_var = ctk.BooleanVar(value=False)
+        # Gesture detection toggle (enabled by default)
+        self.gesture_var = ctk.BooleanVar(value=True)
         self.gesture_toggle = ctk.CTkSwitch(
             control_frame, text="👋 Gestures", 
             variable=self.gesture_var,
@@ -230,12 +235,12 @@ class EmotionDetectionApp(ctk.CTk):
         # Initially hidden
         self.show_gesture_points = False
         
-        # Test ElevenLabs button
-        self.test_tts_btn = ctk.CTkButton(
-            control_frame, text="🔊 Test TTS", command=self.test_elevenlabs_api,
-            width=100, height=35, fg_color="#059669", hover_color="#047857"
+        # Test Chatbot button
+        self.test_chatbot_btn = ctk.CTkButton(
+            control_frame, text="🤖 Test Chat", command=self.test_chatbot,
+            width=120, height=35, fg_color="#10b981", hover_color="#059669"
         )
-        self.test_tts_btn.pack(side="left", padx=5)
+        self.test_chatbot_btn.pack(side="left", padx=5)
         
         # Test All Voices button
         self.test_voices_btn = ctk.CTkButton(
@@ -250,6 +255,13 @@ class EmotionDetectionApp(ctk.CTk):
             width=80, height=35, fg_color="#0ea5e9", hover_color="#0284c7"
         )
         self.help_btn.pack(side="left", padx=5)
+        
+        # Settings button
+        self.settings_btn = ctk.CTkButton(
+            control_frame, text="⚙️ Settings", command=self.show_settings,
+            width=100, height=35, fg_color="#8b5cf6", hover_color="#7c3aed"
+        )
+        self.settings_btn.pack(side="left", padx=5)
         
         # Status label
         self.status_label = ctk.CTkLabel(
@@ -388,23 +400,6 @@ class EmotionDetectionApp(ctk.CTk):
         )
         self.smoothing_label.pack(side="left")
         
-        # Text analysis section
-        text_frame = ctk.CTkFrame(analysis_frame)
-        text_frame.pack(fill="x", padx=10, pady=10)
-        
-        ctk.CTkLabel(
-            text_frame, text="💬 Text Analysis",
-            font=("Arial", 14, "bold")
-        ).pack(pady=5)
-        
-        self.text_input = ctk.CTkTextbox(text_frame, height=60, font=("Arial", 11))
-        self.text_input.pack(fill="x", padx=5, pady=5)
-        
-        ctk.CTkButton(
-            text_frame, text="Analyze Text", 
-            command=self.analyze_text, height=30
-        ).pack(pady=5)
-        
         # Voice button
         if self.detector.recognizer:
             self.voice_btn = ctk.CTkButton(
@@ -442,74 +437,47 @@ class EmotionDetectionApp(ctk.CTk):
         )
         personality_menu.pack(side="left")
         
-        # Auto-analysis toggle
-        auto_frame = ctk.CTkFrame(chat_frame, fg_color="transparent")
-        auto_frame.pack(fill="x", padx=10, pady=5)
-        
-        self.auto_analysis_var = ctk.BooleanVar(value=False)
-        self.auto_analysis_switch = ctk.CTkSwitch(
-            auto_frame,
-            text="Auto AI Vision (30s)",
-            variable=self.auto_analysis_var,
-            command=self.toggle_auto_analysis,
-            font=("Arial", 11)
-        )
-        self.auto_analysis_switch.pack(side="left")
-        
-        # TTS toggle
+        # Voice selector frame
         tts_frame = ctk.CTkFrame(chat_frame, fg_color="transparent")
         tts_frame.pack(fill="x", padx=10, pady=5)
         
+        # Voice is always enabled by default
         self.tts_var = ctk.BooleanVar(value=True)
-        self.tts_switch = ctk.CTkSwitch(
-            tts_frame,
-            text="🔊 Voice Responses",
-            variable=self.tts_var,
-            command=self.toggle_tts,
-            font=("Arial", 11)
-        )
-        self.tts_switch.pack(side="left")
+        self.tts_enabled = True
         
-        # --- Voice selection widgets ---
-        # ElevenLabs voice selector (presets + custom)
-        eleven_voice_frame = ctk.CTkFrame(tts_frame, fg_color="transparent")
-        eleven_voice_frame.pack(side="left", padx=(10, 0))
+        # --- Unified Voice Selector ---
+        voice_frame = ctk.CTkFrame(tts_frame, fg_color="transparent")
+        voice_frame.pack(side="left", padx=(10, 0))
 
-        ctk.CTkLabel(eleven_voice_frame, text="Voice (ElevenLabs):", font=("Arial", 11)).pack(side="left", padx=(0, 5))
-        self.eleven_voice_var = ctk.StringVar(value=self.eleven_voice_name)
-        eleven_values = list(self.available_eleven_voices.keys()) + ["Custom"]
-        self.eleven_voice_menu = ctk.CTkOptionMenu(
-            eleven_voice_frame,
-            values=eleven_values,
-            variable=self.eleven_voice_var,
-            command=lambda v: self.change_eleven_voice(v),
-            width=160
-        )
-        self.eleven_voice_menu.pack(side="left")
-
-        # Custom voice id entry (for ElevenLabs custom voice IDs)
-        self.eleven_custom_entry = ctk.CTkEntry(eleven_voice_frame, placeholder_text="Paste custom voice id (optional)", width=220)
-        # show custom entry only if custom selected or config provided
-        if self.eleven_voice_name == "Custom":
-            self.eleven_custom_entry.insert(0, self.eleven_voice_id_custom)
-            self.eleven_custom_entry.pack(side="left", padx=(5, 0))
-
-        # Offline pyttsx3 voice selector (if available)
+        ctk.CTkLabel(voice_frame, text="Voice:", font=("Arial", 11)).pack(side="left", padx=(0, 5))
+        
+        # Build combined voice list: ElevenLabs voices (if key exists) + Offline voices
+        all_voices = []
+        if self.elevenlabs_api_key:
+            # Add ElevenLabs voices with [EL] prefix
+            all_voices.extend([f"[EL] {name}" for name in self.available_eleven_voices.keys()])
+            all_voices.append("[EL] Custom")
+        
+        # Add offline voices with [Offline] prefix
         if self.pyttsx3_voice_map:
-            offline_frame = ctk.CTkFrame(tts_frame, fg_color="transparent")
-            offline_frame.pack(side="left", padx=(10, 0))
+            all_voices.extend([f"[Offline] {name}" for name in self.pyttsx3_voice_map.keys()])
+        
+        # Default to first available voice
+        default_voice = all_voices[0] if all_voices else "No voices available"
+        self.unified_voice_var = ctk.StringVar(value=default_voice)
+        
+        self.voice_menu = ctk.CTkOptionMenu(
+            voice_frame,
+            values=all_voices if all_voices else ["No voices available"],
+            variable=self.unified_voice_var,
+            command=lambda v: self.change_voice(v),
+            width=200
+        )
+        self.voice_menu.pack(side="left")
 
-            ctk.CTkLabel(offline_frame, text="Offline Voice:", font=("Arial", 11)).pack(side="left", padx=(0, 5))
-            pyttsx3_names = list(self.pyttsx3_voice_map.keys())
-            self.pyttsx3_voice_var = ctk.StringVar(value=self.pyttsx3_selected_voice or pyttsx3_names[0])
-            self.pyttsx3_voice_menu = ctk.CTkOptionMenu(
-                offline_frame,
-                values=pyttsx3_names,
-                variable=self.pyttsx3_voice_var,
-                command=lambda v: self.change_offline_voice(v),
-                width=200
-            )
-            self.pyttsx3_voice_menu.pack(side="left")
+        # Custom voice id entry (only shown when ElevenLabs Custom is selected)
+        self.eleven_custom_entry = ctk.CTkEntry(voice_frame, placeholder_text="Paste custom voice id", width=220)
+        # Initially hidden
         
         # Chat display
         self.chat_display = ctk.CTkTextbox(
@@ -544,19 +512,17 @@ class EmotionDetectionApp(ctk.CTk):
         if self.is_running:
             return
         
-        camera_index = self.detector.config.get("camera_index", 0)
-        self.cap = cv2.VideoCapture(camera_index)
-        
-        if not self.cap.isOpened():
-            messagebox.showerror("Error", "Could not open camera. Please check your camera connection.")
+        # Start webcam
+        if not self._start_webcam():
             return
         
+        # Common setup for webcam mode
         self.is_running = True
         self.start_btn.configure(state="disabled")
         self.stop_btn.configure(state="normal")
         self.status_label.configure(text="🟢 Detecting...")
         
-        # Show helpful tip about glasses removal
+        # Show helpful tip
         self.add_chat_message(
             "System", 
             "💡 Tip: For best emotion detection, please remove glasses if possible. "
@@ -567,6 +533,16 @@ class EmotionDetectionApp(ctk.CTk):
         # Start video thread
         threading.Thread(target=self.update_frame, daemon=True).start()
     
+    def _start_webcam(self):
+        """Start webcam capture"""
+        camera_index = self.detector.config.get("camera_index", 0)
+        self.cap = cv2.VideoCapture(camera_index)
+        
+        if not self.cap.isOpened():
+            messagebox.showerror("Error", "Could not open camera. Please check your camera connection.")
+            return False
+        return True
+    
     def stop_detection(self):
         """Stop video capture"""
         self.is_running = False
@@ -575,18 +551,27 @@ class EmotionDetectionApp(ctk.CTk):
             self.cap.release()
             self.cap = None
         
+        # Screen capturer is cleaned up in the update_frame thread
+        
         self.start_btn.configure(state="normal")
         self.stop_btn.configure(state="disabled")
         self.status_label.configure(text="⏸️ Stopped")
-        self.video_label.configure(image=None, text="Camera Off")
+        self.video_label.configure(image=None, text="Stopped")
     
     def update_frame(self):
         """Update video frame and detect emotions"""
+        import time
+        
         while self.is_running:
+            frame = None
+            
+            # Get frame from webcam
             if self.cap and self.cap.isOpened():
                 ret, frame = self.cap.read()
-                
-                if ret:
+                if not ret:
+                    frame = None
+            
+            if frame is not None:
                     # Detect gestures if enabled
                     if self.gesture_var.get():
                         frame, gesture, gesture_data = self.detector.detect_gestures(frame, show_points=self.show_gesture_points)
@@ -879,28 +864,6 @@ class EmotionDetectionApp(ctk.CTk):
             text=f"{emoji} {dominant_emotion}"
         )
     
-    def analyze_text(self):
-        """Analyze text from text input"""
-        text = self.text_input.get("1.0", "end-1c").strip()
-        
-        if not text:
-            messagebox.showwarning("Warning", "Please enter some text to analyze.")
-            return
-        
-        result = self.detector.analyze_text(text)
-        
-        # Update emotion display
-        emotions_dict = result["all_scores"]
-        dominant = result["emotion"]
-        
-        self.update_emotion_display(emotions_dict, dominant)
-        
-        # Show result in chat
-        self.add_chat_message(
-            f"Text Analysis: {dominant} ({result['sentiment']} sentiment)",
-            "system"
-        )
-    
     def voice_input(self):
         """Capture voice input and send to AI chatbot"""
         if self.is_voice_recording:
@@ -1120,16 +1083,133 @@ class EmotionDetectionApp(ctk.CTk):
         messagebox.showinfo("Success", f"Snapshot saved to:\n{filename}")
     
     def upload_image(self):
-        """Upload and analyze an image"""
+        """Upload and analyze an image for emotions and with Gemini AI"""
         filename = filedialog.askopenfilename(
             title="Select Image",
             filetypes=[("Image files", "*.png *.jpg *.jpeg *.bmp *.gif")]
         )
         
         if filename:
-            # Analyze with Gemini
-            response = self.chatbot.analyze_image(filename)
-            self.add_chat_message(f"Image Analysis:\n{response}", "ai")
+            try:
+                # Load the image
+                image = cv2.imread(filename)
+                if image is None:
+                    messagebox.showerror("Error", "Could not load image file.")
+                    return
+                
+                # Store for image mode
+                self.uploaded_image = image.copy()
+                
+                # Analyze for emotions
+                self._analyze_static_image(image)
+                
+                # Also analyze with Gemini AI in background
+                def gemini_analysis():
+                    try:
+                        response = self.chatbot.analyze_image(filename)
+                        self.add_chat_message("AI", f"🤖 Image Analysis:\n{response}", color="purple")
+                    except Exception as e:
+                        self.add_chat_message("System", f"AI analysis error: {str(e)}", color="red")
+                
+                threading.Thread(target=gemini_analysis, daemon=True).start()
+                
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to process image: {str(e)}")
+    
+    def _analyze_static_image(self, image):
+        """Analyze a static image for face and emotions"""
+        try:
+            # Make a copy for annotation
+            annotated_frame = image.copy()
+            
+            # Detect faces
+            faces = self.detector.detect_faces(image)
+            
+            if len(faces) > 0:
+                all_emotions = []
+                
+                # Process each detected face
+                for (x, y, w, h) in faces:
+                    # Get face region
+                    face_roi = image[y:y+h, x:x+w]
+                    
+                    # Predict emotion
+                    emotions = self.detector.predict_emotion(face_roi)
+                    all_emotions.append(emotions)
+                    
+                    # Get dominant emotion
+                    dominant = max(emotions.items(), key=lambda x: x[1])
+                    
+                    # Get emotion color
+                    emotion_color = self.detector.emotion_colors.get(
+                        dominant[0], 
+                        (0, 255, 0)
+                    )
+                    
+                    # Draw rectangle with emotion color
+                    cv2.rectangle(annotated_frame, (x, y), (x+w, y+h), emotion_color, 3)
+                    
+                    # Draw emotion label with background
+                    emotion_text = f"{dominant[0].upper()}: {dominant[1]:.1f}%"
+                    
+                    # Get text size for background
+                    font = cv2.FONT_HERSHEY_SIMPLEX
+                    font_scale = 0.7
+                    font_thickness = 2
+                    (text_width, text_height), baseline = cv2.getTextSize(
+                        emotion_text, font, font_scale, font_thickness
+                    )
+                    
+                    # Draw background rectangle
+                    cv2.rectangle(
+                        annotated_frame, 
+                        (x, y - text_height - 15), 
+                        (x + text_width + 10, y - 5),
+                        emotion_color, 
+                        -1  # Filled
+                    )
+                    
+                    # Draw text in white
+                    cv2.putText(
+                        annotated_frame, emotion_text, (x + 5, y - 10),
+                        font, font_scale, (255, 255, 255), font_thickness
+                    )
+                
+                # Update display
+                self.current_frame = annotated_frame
+                self.display_frame(annotated_frame)
+                
+                # Update emotion bars with first face's emotions
+                face_emotions = all_emotions[0]
+                for emotion, value in face_emotions.items():
+                    if emotion in self.emotion_bars:
+                        self.emotion_bars[emotion].set(value / 100.0)  # Convert to 0-1 range
+                
+                # Get dominant emotion from first face
+                dominant_emotion = max(face_emotions.items(), key=lambda x: x[1])
+                self.current_emotion = dominant_emotion[0]
+                
+                # Show result
+                self.add_chat_message(
+                    "System",
+                    f"✅ Detected {len(faces)} face(s). Dominant emotion: {dominant_emotion[0]} ({dominant_emotion[1]:.1f}%)",
+                    color="green"
+                )
+            else:
+                # No faces detected - still display the image
+                self.current_frame = annotated_frame
+                self.display_frame(annotated_frame)
+                
+                self.add_chat_message(
+                    "System",
+                    "⚠️ No faces detected in the image.",
+                    color="orange"
+                )
+                
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            messagebox.showerror("Error", f"Failed to analyze image: {str(e)}")
     
     def analyze_current_frame(self):
         """Analyze the current webcam frame with Gemini AI"""
@@ -1164,33 +1244,6 @@ class EmotionDetectionApp(ctk.CTk):
         # Run in background thread
         threading.Thread(target=analyze, daemon=True).start()
     
-    def toggle_auto_analysis(self):
-        """Toggle automatic AI vision analysis"""
-        self.auto_analysis_enabled = self.auto_analysis_var.get()
-        
-        if self.auto_analysis_enabled:
-            self.add_chat_message("🤖 Auto AI Vision enabled (30s intervals)", "system")
-            self.last_analysis_time = 0  # Force immediate analysis
-        else:
-            self.add_chat_message("🤖 Auto AI Vision disabled", "system")
-    
-    def toggle_tts(self):
-        """Toggle text-to-speech for AI responses"""
-        self.tts_enabled = self.tts_var.get()
-        
-        if self.tts_enabled:
-            # Check what's available
-            if self.tts_engine:
-                self.add_chat_message("🔊 Voice responses enabled (using offline voice)", "system", color="green")
-            elif self.elevenlabs_api_key and AUDIO_AVAILABLE:
-                self.add_chat_message("🔊 Voice responses enabled (using ElevenLabs)", "system", color="green")
-            else:
-                self.tts_var.set(False)
-                self.tts_enabled = False
-                self.add_chat_message("❌ No TTS engine available (install pyttsx3)", "system", color="red")
-        else:
-            self.add_chat_message("🔇 Voice responses disabled", "system")
-    
     def toggle_gesture_visibility(self):
         """Show/hide gesture points button when gesture detection is toggled"""
         if self.gesture_var.get():
@@ -1211,38 +1264,45 @@ class EmotionDetectionApp(ctk.CTk):
             self.gesture_points_btn.configure(fg_color="#7c3aed", hover_color="#6d28d9")
             self.add_chat_message("📍 Gesture points disabled", "system")
 
-    def change_eleven_voice(self, selection: str):
-        """Handle ElevenLabs voice selection (preset or Custom)."""
-        # Show or hide custom entry
+    def change_voice(self, selection: str):
+        """Handle unified voice selection (ElevenLabs or Offline)."""
         try:
-            if selection == "Custom":
-                # show custom entry if not packed
-                if not self.eleven_custom_entry.winfo_ismapped():
-                    self.eleven_custom_entry.pack(side="left", padx=(5, 0))
-            else:
-                # hide custom entry if visible
+            if selection.startswith("[EL]"):
+                # ElevenLabs voice selected
+                voice_name = selection.replace("[EL] ", "")
+                
+                if voice_name == "Custom":
+                    # Show custom entry field
+                    if not self.eleven_custom_entry.winfo_ismapped():
+                        self.eleven_custom_entry.pack(side="left", padx=(5, 0))
+                else:
+                    # Hide custom entry field
+                    if self.eleven_custom_entry.winfo_ismapped():
+                        self.eleven_custom_entry.pack_forget()
+                
+                # Save selection
+                self.eleven_voice_name = voice_name
+                self.add_chat_message(f"🎤 Voice set to: {voice_name} (ElevenLabs)", "system", color="green")
+                
+            elif selection.startswith("[Offline]"):
+                # Offline pyttsx3 voice selected
+                voice_name = selection.replace("[Offline] ", "")
+                
+                # Hide custom entry if visible
                 if self.eleven_custom_entry.winfo_ismapped():
                     self.eleven_custom_entry.pack_forget()
-
-            # Save selection in memory (not writing config file)
-            self.eleven_voice_name = selection
-            self.add_chat_message(f"🎤 ElevenLabs voice set to: {selection}", "system", color="green")
-        except Exception:
-            pass
-
-    def change_offline_voice(self, selection: str):
-        """Change offline pyttsx3 voice to the selected voice name."""
-        try:
-            voice_id = self.pyttsx3_voice_map.get(selection)
-            if voice_id and self.tts_engine:
-                try:
-                    self.tts_engine.setProperty('voice', voice_id)
-                    self.pyttsx3_selected_voice = selection
-                    self.add_chat_message(f"🔊 Offline voice changed to: {selection}", "system", color="green")
-                except Exception as e:
-                    self.add_chat_message(f"❌ Could not set offline voice: {e}", "system", color="red")
-        except Exception:
-            pass
+                
+                # Change pyttsx3 voice
+                voice_id = self.pyttsx3_voice_map.get(voice_name)
+                if voice_id and self.tts_engine:
+                    try:
+                        self.tts_engine.setProperty('voice', voice_id)
+                        self.pyttsx3_selected_voice = voice_name
+                        self.add_chat_message(f"🔊 Voice changed to: {voice_name} (Offline)", "system", color="green")
+                    except Exception as e:
+                        self.add_chat_message(f"❌ Could not set offline voice: {e}", "system", color="red")
+        except Exception as e:
+            print(f"Error changing voice: {e}")
     
     def check_auto_analysis(self):
         """Check if it's time to run auto-analysis"""
@@ -1269,184 +1329,98 @@ class EmotionDetectionApp(ctk.CTk):
             
             threading.Thread(target=auto_analyze, daemon=True).start()
     
-    def test_elevenlabs_api(self):
-        """Test ElevenLabs API connection and quota"""
-        self.test_tts_btn.configure(state="disabled", text="Testing...")
-        
-        def test_api():
-            try:
-                if not self.elevenlabs_api_key:
-                    self.add_chat_message("❌ No ElevenLabs API key configured", "system", color="red")
-                    self.elevenlabs_status = "no_key"
-                    self.test_tts_btn.configure(state="normal", text="🔊 Test TTS")
-                    return
-                
-                # First check user info to see quota
-                user_url = "https://api.elevenlabs.io/v1/user"
-                headers = {"xi-api-key": self.elevenlabs_api_key}
-                
-                user_response = requests.get(user_url, headers=headers, timeout=5)
-                
-                if user_response.status_code == 200:
-                    user_data = user_response.json()
-                    subscription = user_data.get("subscription", {})
-                    character_count = subscription.get("character_count", 0)
-                    character_limit = subscription.get("character_limit", 0)
-                    
-                    self.add_chat_message(
-                        f"✅ ElevenLabs API Connected!\n"
-                        f"📊 Usage: {character_count:,} / {character_limit:,} characters\n"
-                        f"📈 Remaining: {character_limit - character_count:,} characters",
-                        "system",
-                        color="green"
-                    )
-                    
-                    # Test actual TTS
-                    test_text = "This is a test of the text to speech system."
-                    # Use selected ElevenLabs voice if available
-                    if hasattr(self, 'eleven_voice_var'):
-                        sel = self.eleven_voice_var.get()
-                        if sel == 'Custom' and hasattr(self, 'eleven_custom_entry'):
-                            custom_id = self.eleven_custom_entry.get().strip()
-                            voice_id = custom_id if custom_id else list(self.available_eleven_voices.values())[0]
-                        else:
-                            voice_id = self.available_eleven_voices.get(sel, list(self.available_eleven_voices.values())[0])
-                    else:
-                        voice_id = list(self.available_eleven_voices.values())[0]
-
-                    tts_url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-                    
-                    tts_headers = {
-                        "Accept": "audio/mpeg",
-                        "Content-Type": "application/json",
-                        "xi-api-key": self.elevenlabs_api_key
-                    }
-                    
-                    tts_data = {
-                        "text": test_text,
-                        "model_id": "eleven_turbo_v2_5",  # Updated to newer model for free tier
-                        "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}
-                    }
-                    
-                    tts_response = requests.post(tts_url, json=tts_data, headers=tts_headers, timeout=10)
-                    
-                    if tts_response.status_code == 200:
-                        self.add_chat_message("🔊 TTS Test Successful! Playing audio...", "system", color="green")
-                        self.use_elevenlabs = True
-                        self.elevenlabs_status = "working"
-                        
-                        # Play the test audio
-                        if AUDIO_AVAILABLE:
-                            audio_data = io.BytesIO(tts_response.content)
-                            pygame.mixer.music.load(audio_data, 'mp3')
-                            pygame.mixer.music.play()
-                    else:
-                        error_data = tts_response.json() if tts_response.content else {}
-                        detail = error_data.get("detail", {})
-                        message = detail.get("message", tts_response.text)
-                        
-                        self.add_chat_message(
-                            f"❌ TTS Permission Error\n{message}\n\n"
-                            f"✅ API key is valid but lacks text-to-speech permission.\n"
-                            f"🔄 Using offline voice (pyttsx3) instead.",
-                            "system",
-                            color="orange"
-                        )
-                        self.elevenlabs_status = "no_permission"
-                        
-                elif user_response.status_code == 401:
-                    self.add_chat_message("❌ Invalid API Key", "system", color="red")
-                    self.elevenlabs_status = "invalid_key"
-                    
-                elif user_response.status_code == 429:
-                    self.add_chat_message("❌ Rate Limit Exceeded - Try again later", "system", color="red")
-                    self.elevenlabs_status = "quota_exceeded"
-                    
-                else:
-                    self.add_chat_message(
-                        f"❌ API Error: {user_response.status_code}\n{user_response.text}",
-                        "system",
-                        color="red"
-                    )
-                    self.elevenlabs_status = "error"
-                    
-            except requests.exceptions.Timeout:
-                self.add_chat_message("⏱️ Connection timeout - Check internet connection", "system", color="red")
-                self.elevenlabs_status = "timeout"
-                
-            except Exception as e:
-                self.add_chat_message(f"❌ Test Error: {e}", "system", color="red")
-                self.elevenlabs_status = "error"
-                
-            finally:
-                self.test_tts_btn.configure(state="normal", text="🔊 Test TTS")
-        
-        threading.Thread(target=test_api, daemon=True).start()
-    
     def test_all_voices(self):
-        """Test currently selected ElevenLabs voice"""
+        """Test currently selected voice (ElevenLabs or Offline)"""
         self.test_voices_btn.configure(state="disabled", text="Testing...")
         
         def test_voice():
             try:
-                if not self.elevenlabs_api_key:
-                    self.add_chat_message("❌ No ElevenLabs API key configured", "system", color="red")
-                    self.test_voices_btn.configure(state="normal", text="🎤 Test Voice")
-                    return
+                # Get currently selected voice from unified selector
+                selected = self.unified_voice_var.get()
+                test_text = "Hello! This is a test of the text to speech system."
                 
-                if not AUDIO_AVAILABLE:
-                    self.add_chat_message("❌ Audio playback not available (install pygame)", "system", color="red")
-                    self.test_voices_btn.configure(state="normal", text="🎤 Test Voice")
-                    return
-                
-                # Get currently selected voice
-                if hasattr(self, 'eleven_voice_var'):
-                    voice_name = self.eleven_voice_var.get()
+                if selected.startswith("[EL]"):
+                    # Test ElevenLabs voice
+                    voice_name = selected.replace("[EL] ", "")
+                    
+                    if not self.elevenlabs_api_key:
+                        self.add_chat_message("❌ No ElevenLabs API key configured", "system", color="red")
+                        self.test_voices_btn.configure(state="normal", text="🎤 Test Voice")
+                        return
+                    
+                    if not AUDIO_AVAILABLE:
+                        self.add_chat_message("❌ Audio playback not available (install pygame)", "system", color="red")
+                        self.test_voices_btn.configure(state="normal", text="🎤 Test Voice")
+                        return
+                    
+                    # Get voice ID
                     if voice_name == 'Custom' and hasattr(self, 'eleven_custom_entry'):
                         custom_id = self.eleven_custom_entry.get().strip()
                         voice_id = custom_id if custom_id else list(self.available_eleven_voices.values())[0]
                     else:
                         voice_id = self.available_eleven_voices.get(voice_name, list(self.available_eleven_voices.values())[0])
-                else:
-                    voice_name = "Rachel"
-                    voice_id = list(self.available_eleven_voices.values())[0]
-                
-                self.add_chat_message(f"🎤 Testing voice: {voice_name}...", "system", color="blue")
-                
-                test_text = "Hello! This is a test of the text to speech system."
-                url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-                
-                headers = {
-                    "Accept": "audio/mpeg",
-                    "Content-Type": "application/json",
-                    "xi-api-key": self.elevenlabs_api_key
-                }
-                
-                data = {
-                    "text": test_text,
-                    "model_id": "eleven_turbo_v2_5",
-                    "voice_settings": {
-                        "stability": 0.5,
-                        "similarity_boost": 0.75
+                    
+                    self.add_chat_message(f"🎤 Testing ElevenLabs voice: {voice_name}...", "system", color="blue")
+                    
+                    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+                    
+                    headers = {
+                        "Accept": "audio/mpeg",
+                        "Content-Type": "application/json",
+                        "xi-api-key": self.elevenlabs_api_key
                     }
-                }
-                
-                response = requests.post(url, json=data, headers=headers, timeout=10)
-                
-                if response.status_code == 200:
-                    # Play audio
-                    audio_data = io.BytesIO(response.content)
-                    pygame.mixer.music.load(audio_data, 'mp3')
-                    pygame.mixer.music.play()
                     
-                    # Wait for playback to finish
-                    while pygame.mixer.music.get_busy():
-                        pygame.time.Clock().tick(10)
+                    data = {
+                        "text": test_text,
+                        "model_id": "eleven_turbo_v2_5",
+                        "voice_settings": {
+                            "stability": 0.5,
+                            "similarity_boost": 0.75
+                        }
+                    }
                     
-                    self.add_chat_message(f"✅ {voice_name} - Working! ({len(response.content)} bytes)", "system", color="green")
+                    response = requests.post(url, json=data, headers=headers, timeout=10)
+                    
+                    if response.status_code == 200:
+                        # Play audio
+                        audio_data = io.BytesIO(response.content)
+                        pygame.mixer.music.load(audio_data, 'mp3')
+                        pygame.mixer.music.play()
+                        
+                        # Wait for playback to finish
+                        while pygame.mixer.music.get_busy():
+                            pygame.time.Clock().tick(10)
+                        
+                        self.add_chat_message(f"✅ {voice_name} - Working! ({len(response.content)} bytes)", "system", color="green")
+                    else:
+                        self.add_chat_message(f"❌ {voice_name} - Failed ({response.status_code})", "system", color="red")
+                        self.add_chat_message(f"Response: {response.text}", "system", color="red")
+                
+                elif selected.startswith("[Offline]"):
+                    # Test Offline voice
+                    voice_name = selected.replace("[Offline] ", "")
+                    
+                    if not self.tts_engine:
+                        self.add_chat_message("❌ Offline TTS engine not available", "system", color="red")
+                        self.test_voices_btn.configure(state="normal", text="🎤 Test Voice")
+                        return
+                    
+                    self.add_chat_message(f"🔊 Testing Offline voice: {voice_name}...", "system", color="blue")
+                    
+                    # Get voice ID
+                    voice_id = self.pyttsx3_voice_map.get(voice_name)
+                    if voice_id:
+                        try:
+                            self.tts_engine.setProperty('voice', voice_id)
+                            self.tts_engine.say(test_text)
+                            self.tts_engine.runAndWait()
+                            self.add_chat_message(f"✅ {voice_name} - Working!", "system", color="green")
+                        except Exception as e:
+                            self.add_chat_message(f"❌ {voice_name} - Failed: {str(e)}", "system", color="red")
+                    else:
+                        self.add_chat_message(f"❌ Voice not found: {voice_name}", "system", color="red")
                 else:
-                    self.add_chat_message(f"❌ {voice_name} - Failed ({response.status_code})", "system", color="red")
-                    self.add_chat_message(f"Response: {response.text}", "system", color="red")
+                    self.add_chat_message("❌ No voice selected", "system", color="red")
                 
             except Exception as e:
                 self.add_chat_message(f"❌ Test Error: {str(e)}", "system", color="red")
@@ -1455,6 +1429,64 @@ class EmotionDetectionApp(ctk.CTk):
                 self.test_voices_btn.configure(state="normal", text="🎤 Test Voice")
         
         threading.Thread(target=test_voice, daemon=True).start()
+    
+    def test_chatbot(self):
+        """Test the Gemini chatbot functionality and show model info"""
+        self.test_chatbot_btn.configure(state="disabled", text="Testing...")
+        
+        def run_test():
+            try:
+                # Get model info
+                self.add_chat_message("🤖 Testing Gemini Chatbot...", "system", color="blue")
+                
+                info = self.chatbot.get_model_info()
+                
+                # Display model information
+                self.add_chat_message(
+                    f"📊 Chatbot Status:\n"
+                    f"• Model: {info['current_model']}\n"
+                    f"• API Configured: {info['api_configured']}\n"
+                    f"• Available Models: {info['total_available']}",
+                    "system",
+                    color="cyan"
+                )
+                
+                # Show top 3 available models
+                if info['available_models']:
+                    models_list = "\n".join([f"  {i+1}. {m}" for i, m in enumerate(info['available_models'][:3])])
+                    self.add_chat_message(
+                        f"🎯 Top Available Models:\n{models_list}",
+                        "system",
+                        color="cyan"
+                    )
+                
+                # Test a conversation
+                test_response = self.chatbot.send_message("Hello! How are you today?", "happy")
+                self.add_chat_message("Test message sent: 'Hello! How are you today?'", "user")
+                self.add_chat_message(test_response, "ai")
+                
+                # Get conversation summary
+                summary = self.chatbot.get_conversation_summary()
+                self.add_chat_message(
+                    f"📈 Conversation Summary:\n"
+                    f"• Total Messages: {summary['total_messages']}\n"
+                    f"• Personality: {summary['personality']}\n"
+                    f"• Emotions Discussed: {', '.join(summary['emotions_discussed'])}",
+                    "system",
+                    color="green"
+                )
+                
+                self.add_chat_message("✅ Chatbot test complete!", "system", color="green")
+                
+            except Exception as e:
+                self.add_chat_message(f"❌ Chatbot test failed: {str(e)}", "system", color="red")
+                import traceback
+                traceback.print_exc()
+            
+            finally:
+                self.test_chatbot_btn.configure(state="normal", text="🤖 Test Chat")
+        
+        threading.Thread(target=run_test, daemon=True).start()
     
     def save_session(self):
         """Save current session data"""
@@ -1528,9 +1560,11 @@ class EmotionDetectionApp(ctk.CTk):
                     ("▶️ Start", "Start camera and emotion detection"),
                     ("⏹️ Stop", "Stop camera and detection"),
                     ("📸 Snapshot", "Save current frame as image to data/exports/"),
-                    ("🖼️ Upload", "Upload and analyze an image file with AI"),
-                    ("🤖 AI Vision", "Analyze current webcam frame with Gemini AI"),
+                    ("🖼️ Upload Image", "Upload and analyze a photo with emotion detection + AI"),
+                    ("🤖 AI Vision", "Analyze current frame with Gemini AI"),
                     ("👋 Gestures", "Toggle hand gesture detection on/off"),
+                    ("⚙️ Settings", "Configure API keys"),
+                    ("❓ Help", "Show this help guide"),
                     ("💾 Save", "Save current session data to JSON"),
                     ("📄 Export CSV", "Export emotion data to CSV file"),
                 ]
@@ -1583,7 +1617,6 @@ class EmotionDetectionApp(ctk.CTk):
                     ("Colored Bars", "Each emotion has its own color"),
                     ("Current Emotion", "Large emoji shows dominant emotion"),
                     ("Smoothing Slider", "Adjust volatility (1-10 frames)"),
-                    ("Text Analysis", "Type text to analyze emotion"),
                     ("🎤 Voice Input", "Speak to analyze your voice (if available)"),
                 ]
             },
@@ -1591,8 +1624,6 @@ class EmotionDetectionApp(ctk.CTk):
                 "title": "💬 AI Chat Features",
                 "items": [
                     ("Personality", "Choose: Empathetic, Neutral, or Professional"),
-                    ("Auto AI Vision", "Toggle automatic analysis every 30 seconds"),
-                    ("🔊 Voice Responses", "AI speaks responses using ElevenLabs TTS"),
                     ("Context-Aware", "AI knows your current detected emotion"),
                     ("Image Analysis", "Upload images for AI description"),
                     ("🎤 Voice Chat", "Use ☝️ Pointing gesture to START voice recording"),
@@ -1680,6 +1711,217 @@ class EmotionDetectionApp(ctk.CTk):
             font=("Arial", 14, "bold")
         )
         close_btn.pack(pady=10)
+    
+    def show_settings(self):
+        """Show settings dialog for API keys and configuration"""
+        settings_window = ctk.CTkToplevel(self)
+        settings_window.title("⚙️ Settings")
+        settings_window.geometry("700x600")
+        
+        # Make window modal
+        settings_window.grab_set()
+        
+        # Title
+        title_label = ctk.CTkLabel(
+            settings_window, 
+            text="⚙️ Application Settings",
+            font=("Arial", 24, "bold")
+        )
+        title_label.pack(pady=20)
+        
+        # Scrollable settings content
+        settings_scroll = ctk.CTkScrollableFrame(settings_window, width=650, height=420)
+        settings_scroll.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+        
+        # === API Keys Section ===
+        api_frame = ctk.CTkFrame(settings_scroll, fg_color="#2b2b2b", corner_radius=10)
+        api_frame.pack(fill="x", pady=10, padx=10)
+        
+        ctk.CTkLabel(
+            api_frame,
+            text="🔑 API Keys",
+            font=("Arial", 18, "bold")
+        ).pack(pady=10, padx=15, anchor="w")
+        
+        # Gemini API Key
+        ctk.CTkLabel(
+            api_frame,
+            text="Google Gemini API Key:",
+            font=("Arial", 12, "bold"),
+            anchor="w"
+        ).pack(pady=(10, 2), padx=20, anchor="w")
+        
+        ctk.CTkLabel(
+            api_frame,
+            text="Required for AI Vision and chatbot features",
+            font=("Arial", 10),
+            text_color="gray",
+            anchor="w"
+        ).pack(pady=(0, 5), padx=20, anchor="w")
+        
+        self.gemini_key_entry = ctk.CTkEntry(
+            api_frame,
+            width=600,
+            placeholder_text="Enter your Gemini API key (get from https://makersuite.google.com/app/apikey)",
+            show="•"  # Hide the key
+        )
+        self.gemini_key_entry.pack(pady=5, padx=20)
+        
+        # Load current value from config or chatbot
+        current_gemini_key = self.detector.config.get("gemini_api_key", "")
+        if not current_gemini_key or current_gemini_key == "YOUR_GEMINI_API_KEY_HERE":
+            # Fallback to chatbot api_key if config is empty
+            current_gemini_key = self.chatbot.api_key if hasattr(self.chatbot, 'api_key') else ""
+        
+        if current_gemini_key and current_gemini_key != "YOUR_GEMINI_API_KEY_HERE":
+            self.gemini_key_entry.insert(0, current_gemini_key)
+        
+        # Show/Hide Gemini key button
+        show_gemini_var = ctk.BooleanVar(value=False)
+        def toggle_gemini_key():
+            self.gemini_key_entry.configure(show="" if show_gemini_var.get() else "•")
+        
+        ctk.CTkCheckBox(
+            api_frame,
+            text="Show API Key",
+            variable=show_gemini_var,
+            command=toggle_gemini_key,
+            font=("Arial", 10)
+        ).pack(pady=2, padx=20, anchor="w")
+        
+        # ElevenLabs API Key
+        ctk.CTkLabel(
+            api_frame,
+            text="ElevenLabs API Key (Optional):",
+            font=("Arial", 12, "bold"),
+            anchor="w"
+        ).pack(pady=(15, 2), padx=20, anchor="w")
+        
+        ctk.CTkLabel(
+            api_frame,
+            text="Optional - for premium text-to-speech. Falls back to offline voice if not provided.",
+            font=("Arial", 10),
+            text_color="gray",
+            anchor="w"
+        ).pack(pady=(0, 5), padx=20, anchor="w")
+        
+        self.elevenlabs_key_entry = ctk.CTkEntry(
+            api_frame,
+            width=600,
+            placeholder_text="Enter your ElevenLabs API key (optional, get from https://elevenlabs.io)",
+            show="•"
+        )
+        self.elevenlabs_key_entry.pack(pady=5, padx=20)
+        
+        # Load current value
+        if self.elevenlabs_api_key and self.elevenlabs_api_key.strip():
+            self.elevenlabs_key_entry.insert(0, self.elevenlabs_api_key)
+        
+        # Show/Hide ElevenLabs key button
+        show_eleven_var = ctk.BooleanVar(value=False)
+        def toggle_eleven_key():
+            self.elevenlabs_key_entry.configure(show="" if show_eleven_var.get() else "•")
+        
+        ctk.CTkCheckBox(
+            api_frame,
+            text="Show API Key",
+            variable=show_eleven_var,
+            command=toggle_eleven_key,
+            font=("Arial", 10)
+        ).pack(pady=2, padx=20, anchor="w")
+        
+        ctk.CTkLabel(api_frame, text="", height=10).pack()
+        
+        # === Buttons ===
+        button_frame = ctk.CTkFrame(settings_window, fg_color="transparent")
+        button_frame.pack(pady=10)
+        
+        # Save button
+        save_btn = ctk.CTkButton(
+            button_frame,
+            text="💾 Save Settings",
+            command=lambda: self.save_settings(settings_window),
+            width=150,
+            height=40,
+            font=("Arial", 14, "bold"),
+            fg_color="#059669",
+            hover_color="#047857"
+        )
+        save_btn.pack(side="left", padx=10)
+        
+        # Cancel button
+        cancel_btn = ctk.CTkButton(
+            button_frame,
+            text="❌ Cancel",
+            command=settings_window.destroy,
+            width=150,
+            height=40,
+            font=("Arial", 14, "bold"),
+            fg_color="#dc2626",
+            hover_color="#b91c1c"
+        )
+        cancel_btn.pack(side="left", padx=10)
+    
+    def save_settings(self, settings_window):
+        """Save settings to config file and apply changes"""
+        try:
+            # Get values from entries
+            gemini_key = self.gemini_key_entry.get().strip()
+            elevenlabs_key = self.elevenlabs_key_entry.get().strip()
+            
+            # Update API keys - always save, even if empty
+            self.detector.config["gemini_api_key"] = gemini_key if gemini_key else ""
+            self.detector.config["elevenlabs_api_key"] = elevenlabs_key if elevenlabs_key else ""
+            
+            # Update chatbot with Gemini key
+            if gemini_key:
+                self.chatbot.api_key = gemini_key
+                # Reinitialize chatbot with new key
+                try:
+                    import google.generativeai as genai
+                    genai.configure(api_key=gemini_key)
+                    self.chatbot.model = genai.GenerativeModel(
+                        model_name='gemini-1.5-flash',
+                        generation_config=self.chatbot.generation_config,
+                        safety_settings=self.chatbot.safety_settings
+                    )
+                    self.chatbot.chat = self.chatbot.model.start_chat(history=[])
+                except Exception as e:
+                    print(f"Error updating Gemini API: {e}")
+            
+            # Update ElevenLabs key
+            if elevenlabs_key:
+                self.elevenlabs_api_key = elevenlabs_key
+            
+            # Save to config file
+            config_path = PROJECT_ROOT / "config.json"
+            with open(config_path, 'w') as f:
+                json.dump(self.detector.config, f, indent=4)
+            
+            # Show success message
+            messagebox.showinfo(
+                "Settings Saved",
+                "Settings have been saved successfully!\n\n"
+                "Changes will take effect immediately for:\n"
+                "• API keys\n\n"
+                "Camera index will apply on next detection start."
+            )
+            
+            # Add to chat
+            self.add_chat_message(
+                "System",
+                "⚙️ Settings updated successfully!",
+                color="green"
+            )
+            
+            # Close settings window
+            settings_window.destroy()
+            
+        except Exception as e:
+            messagebox.showerror(
+                "Error Saving Settings",
+                f"Failed to save settings:\n{str(e)}"
+            )
     
     def on_closing(self):
         """Handle window closing"""

@@ -23,6 +23,9 @@ Real-time emotion detection system combining **facial recognition**, **text anal
 - [🤖 AI Chatbot](#-ai-chatbot)
 - [📊 Analytics](#-analytics)
 - [🔧 Troubleshooting](#-troubleshooting)
+- [🖥️ Screen Capture Guide](#️-screen-capture-guide)
+- [🖼️ Image Upload Guide](#️-image-upload-guide)
+- [📊 Performance Comparison by Input Mode](#-performance-comparison-by-input-mode)
 - [🧪 Technical](#-technical)
 - [📁 Structure](#-structure)
 
@@ -30,7 +33,13 @@ Real-time emotion detection system combining **facial recognition**, **text anal
 
 ## ✨ Features
 
-### 🎥 Emotion Detection
+### 🎥 Multiple Input Sources (NEW!)
+- **Webcam**: Real-time face detection from camera
+- **Screen Capture**: Detect emotions from faces on your screen
+- **Image Upload**: Analyze emotions in uploaded photos
+- **Easy Switching**: Select input mode from dropdown menu
+
+### 🎯 Emotion Detection
 - **7 Emotions**: Angry🔴 Disgust🟢 Fear🟣 Happy🟡 Neutral⚪ Sad🟠 Surprise🔵
 - **Real-Time**: CNN at 30 FPS with color-coded borders
 - **Smoothing**: 1-20 frame averaging for stability (improved!)
@@ -80,15 +89,22 @@ Real-time emotion detection system combining **facial recognition**, **text anal
 # Install
 pip install -r requirements.txt
 
-# Configure (edit config.json)
-"gemini_api_key": "YOUR_GEMINI_KEY_HERE"
-"elevenlabs_api_key": "YOUR_ELEVENLABS_KEY_HERE"  # Optional
-
 # Run
 python src/main.py
+
+# Configure API keys in the app:
+# Click ⚙️ Settings button → Enter API keys → Save
 ```
 
 **Get API Keys**: 
+- Gemini: https://makersuite.google.com/app/apikey (free, required for AI features)
+- ElevenLabs: https://elevenlabs.io/ (optional, for premium TTS)
+
+**OR manually edit config.json**:
+```json
+"gemini_api_key": "YOUR_GEMINI_KEY_HERE"
+"elevenlabs_api_key": "YOUR_ELEVENLABS_KEY_HERE"  # Optional
+``` 
 - Gemini: https://makersuite.google.com/app/apikey (free)
 - ElevenLabs: https://elevenlabs.io/ (optional, has offline fallback)
 
@@ -133,11 +149,33 @@ pip install PyAudio-0.2.14-cp313-cp313-win_amd64.whl
 
 ## ⚙️ Configuration
 
-Edit `config.json`:
+### Using Settings UI (Recommended ✨)
+
+1. Launch the application: `python src/main.py`
+2. Click **⚙️ Settings** button in the top control bar
+3. Enter your API keys:
+   - **Gemini API Key**: Required for AI features
+   - **ElevenLabs API Key**: Optional for premium TTS
+4. Adjust other settings:
+   - Camera Index (0 for built-in, 1+ for external)
+   - Screen Capture FPS (1-30, recommended: 5-10)
+5. Click **💾 Save Settings**
+
+**Benefits**:
+- ✅ No need to manually edit JSON files
+- ✅ Settings saved automatically
+- ✅ Changes apply immediately
+- ✅ API keys are hidden with dots (•••)
+- ✅ Input validation built-in
+
+### Manual Configuration (Alternative)
+
+Edit `config.json` directly:
 
 ```json
 {
   "gemini_api_key": "YOUR_KEY_HERE",
+  "elevenlabs_api_key": "YOUR_ELEVENLABS_KEY",
   "camera_index": 0,
   "confidence_threshold": 0.5,
   "smoothing_frames": 5,
@@ -155,10 +193,24 @@ Edit `config.json`:
 
 ### Basic Operations
 
-**Start Detection**
-1. Click ▶️ Start Detection
-2. Face camera
-3. Emotions display with colored borders
+**Choose Input Mode**
+1. Select from dropdown menu: **Webcam** / **Screen** / **Image**
+   - **Webcam**: Standard camera-based detection
+   - **Screen**: Captures your entire screen to find faces (great for video calls!)
+   - **Image**: Upload and analyze static photos
+
+**Start Detection (Webcam/Screen)**
+1. Select input mode
+2. Click ▶️ Start Detection
+3. For Webcam: Face the camera
+4. For Screen: Ensure faces are visible on screen
+5. Emotions display with colored borders
+
+**Upload Image**
+1. Select "Image" mode OR click 🖼️ Upload Image button
+2. Choose image file (PNG, JPG, BMP, GIF)
+3. View detected emotions and AI analysis
+4. Emotion bars update with detected feelings
 
 **Text Analysis**
 1. Type in text box
@@ -181,12 +233,15 @@ Edit `config.json`:
 
 **Brightness**: Hand up/down OR slider
 
+**Screen Capture Settings**: 
+- Screen capture runs at 5 FPS (configurable) to reduce CPU load
+- Automatically detects faces on entire screen
+- Useful for analyzing emotions during video calls or watching videos
+
 **AI Vision**:
 - Manual: Click 🤖 AI Vision button
 - Auto: Toggle "Auto AI Vision (30s)"
 - Gesture: Show OK sign 👌
-
-**Upload Image**: Click 🖼️ Upload → Select image
 
 **Mismatch Detection**: Enable checkbox → Compare face/text/voice
 
@@ -694,6 +749,186 @@ Free tier quota exceeded (10,000 chars/month)
 - **Wait if rate limited** (too many requests)
 - **Try again** in a few seconds
 
+### Screen Capture Issues
+
+#### "Screen capture not available"
+**Error**: "Screen capture not available. Install 'mss' package."
+
+**Solution**:
+```bash
+pip install mss
+```
+
+#### Permission Denied (macOS)
+**Error**: Screen recording permission denied
+
+**Solution**:
+1. Quit the application
+2. Go to **System Preferences** → **Security & Privacy** → **Privacy** → **Screen Recording**
+3. Enable permission for **Terminal** or **Python**
+4. Restart the application
+
+#### Black Screen / No Faces Detected
+**Possible causes**:
+- Faces are too small on screen (zoom in the video call)
+- Poor lighting in the video feed
+- Faces partially obscured
+
+**Solutions**:
+- Increase the size of video windows
+- Ensure faces are clearly visible
+- Adjust screen brightness/contrast
+
+#### High CPU Usage in Screen Mode
+**Solution**:
+- Screen capture is resource-intensive
+- App limits capture to 5 FPS by default
+- Close unnecessary applications
+- Consider using webcam mode for extended sessions
+- Adjust FPS in code: `self.screen_fps = 3` (lower = less CPU)
+
+---
+
+## 🖥️ Screen Capture Guide
+
+### Overview
+
+Screen capture mode detects faces and emotions from **anywhere on your screen** - perfect for video calls, watching videos, or analyzing content!
+
+### Setup
+
+**Install required library**:
+```bash
+pip install mss
+# Or install all dependencies
+pip install -r requirements.txt
+```
+
+**Platform-Specific Permissions**:
+
+| Platform | Permissions Required |
+|----------|---------------------|
+| **Windows 10/11** | ✅ None (works out of the box) |
+| **macOS** | ⚠️ Screen Recording permission required |
+| **Linux** | ✅ Usually none (X11 dev files if needed) |
+
+### How to Use Screen Capture
+
+1. Select **"screen"** from the **Input:** dropdown menu at the top
+2. Click **▶️ Start** button
+3. The app will:
+   - Capture your primary monitor at 5 FPS
+   - Detect any faces visible on screen
+   - Analyze emotions in real-time
+   - Draw colored detection boxes around faces
+
+### Use Cases
+
+✅ **Video Calls**: Analyze emotions during Zoom/Teams/Meet  
+✅ **Content Analysis**: Study reactions while watching videos  
+✅ **Multiple People**: Detect emotions from multiple faces  
+✅ **Presentations**: Monitor audience reactions  
+✅ **Remote Work**: Understand team emotions in virtual meetings  
+
+### Performance
+
+- **FPS**: 5 (vs 30 for webcam) - optimized for low CPU usage
+- **CPU**: Low-Medium (~30-40%)
+- **Best For**: Video calls, content analysis, multi-person detection
+
+### Configuration
+
+Adjust screen capture FPS in `src/main.py` (line ~75):
+
+```python
+self.screen_fps = 5  # Adjust this value (1-30)
+```
+
+**Recommendations**:
+- **1-3 FPS**: Minimal CPU, slower updates
+- **5-10 FPS**: Balanced (recommended)
+- **15-30 FPS**: Smoother, high CPU usage
+
+Select specific monitor (multi-monitor setups):
+
+```python
+# In update_frame() method
+monitor = self.screen_capturer.monitors[1]  # Primary
+monitor = self.screen_capturer.monitors[2]  # Secondary
+```
+
+### Privacy & Security
+
+🔒 **Your privacy matters**:
+- Screen capture only runs when explicitly started
+- No data sent to external servers (except optional AI)
+- All processing happens locally on your device
+- Stop anytime with ⏹️ Stop button
+
+---
+
+## 🖼️ Image Upload Guide
+
+### Overview
+
+Upload and analyze static images with **full emotion detection** plus AI analysis!
+
+### Features
+
+✅ Upload photos (PNG, JPG, JPEG, BMP, GIF)  
+✅ Automatic face detection  
+✅ Full emotion analysis with color-coded results  
+✅ Emotion bars show all 7 emotions  
+✅ Dual analysis: Emotion detection + Gemini AI  
+✅ Results in chat with percentages  
+
+### How to Use
+
+**Method 1**: Via Input Mode
+1. Select **"image"** from Input dropdown
+2. Application prompts for file selection
+3. Choose your image
+4. View instant analysis
+
+**Method 2**: Direct Upload (works in any mode)
+1. Click **🖼️ Upload Image** button
+2. Select image file
+3. View results immediately
+
+### What You'll See
+
+- **Annotated Image**: Face boxes with emotion labels
+- **Emotion Bars**: Updated percentages for all 7 emotions
+- **Dominant Emotion**: Highlighted with confidence %
+- **AI Description**: Gemini AI analyzes the image
+- **Chat Summary**: "Detected X face(s). Dominant emotion: [emotion] (XX%)"
+
+### Best Results
+
+💡 **Tips**:
+- Clear, well-lit faces
+- Front-facing photos work best
+- Higher resolution = better detection
+- Remove glasses for accuracy
+- Neutral background helps
+
+---
+
+## 📊 Performance Comparison by Input Mode
+
+| Mode | FPS | CPU Usage | Memory | Best For |
+|------|-----|-----------|--------|----------|
+| **Webcam** | 30 | ~25% | ~100MB | Real-time personal detection |
+| **Screen** | 5 | ~35% | ~120MB | Video calls, content analysis |
+| **Image** | N/A | ~5% | ~80MB | Photo analysis, testing |
+
+**Component Breakdown**:
+- Face Detection: ~25% CPU
+- Emotion Model: ~10% CPU
+- Gestures: ~15% CPU (if enabled)
+- AI Vision: ~5% CPU
+- GUI: ~5% CPU
+
 ---
 
 ## 🧪 Technical
@@ -727,17 +962,6 @@ fingers_up = sum([thumb_up, index_up, ...])
 if fingers_up == 5: gesture = "high_five"
 elif fingers_up == 0: gesture = "fist"
 ```
-
-### Performance
-
-| Component | FPS | CPU | Memory |
-|-----------|-----|-----|--------|
-| Face | 30 | ~25% | ~100MB |
-| Emotion | - | ~10% | ~50MB |
-| Gestures | -5 | ~15% | ~80MB |
-| AI Vision | - | ~5% | ~150MB |
-| GUI | - | ~5% | ~50MB |
-| **Total** | **~25** | **~60%** | **~430MB** |
 
 ---
 
@@ -819,4 +1043,4 @@ MIT License - Copyright (c) 2025
 
 **Built with ❤️ for emotion recognition**
 
-*Last Updated: October 30, 2025*
+*Last Updated: November 6, 2025*
