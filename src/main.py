@@ -417,11 +417,26 @@ class EmotionDetectionApp(ctk.CTk):
         chat_frame = ctk.CTkFrame(self)
         chat_frame.grid(row=1, column=2, sticky="nsew", padx=(5, 10), pady=5)
         
-        # Chat title
+        # Chat header with TTS toggle
+        header_frame = ctk.CTkFrame(chat_frame, fg_color="transparent")
+        header_frame.pack(fill="x", padx=10, pady=5)
+        
         ctk.CTkLabel(
-            chat_frame, text="💬 Gemini AI Chat",
+            header_frame, text="💬 Gemini AI Chat",
             font=("Arial", 16, "bold")
-        ).pack(pady=5)
+        ).pack(side="left")
+        
+        self.tts_var = ctk.BooleanVar(value=True)
+        self.tts_enabled = True
+        self.tts_switch = ctk.CTkSwitch(
+            header_frame,
+            text="TTS",
+            variable=self.tts_var,
+            command=self.toggle_tts,
+            onvalue=True,
+            offvalue=False
+        )
+        self.tts_switch.pack(side="right")
         
         # Personality selector
         personality_frame = ctk.CTkFrame(chat_frame, fg_color="transparent")
@@ -445,10 +460,6 @@ class EmotionDetectionApp(ctk.CTk):
         # Voice selector frame
         tts_frame = ctk.CTkFrame(chat_frame, fg_color="transparent")
         tts_frame.pack(fill="x", padx=10, pady=5)
-        
-        # Voice is always enabled by default
-        self.tts_var = ctk.BooleanVar(value=True)
-        self.tts_enabled = True
         
         # --- Unified Voice Selector ---
         voice_frame = ctk.CTkFrame(tts_frame, fg_color="transparent")
@@ -1071,6 +1082,13 @@ class EmotionDetectionApp(ctk.CTk):
         if self.is_speaking or stop_requested:
             self.is_speaking = False
             self.status_label.configure(text="Ready")
+    
+    def toggle_tts(self):
+        """Enable or disable text-to-speech output"""
+        enabled = bool(self.tts_var.get())
+        self.tts_enabled = enabled
+        if not enabled:
+            self.stop_speaking()
     
     def _speak_elevenlabs(self, text: str):
         """Use ElevenLabs API for TTS"""
