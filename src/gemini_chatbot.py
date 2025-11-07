@@ -158,16 +158,16 @@ class GeminiChatbot:
     def _get_emotion_context(self, emotion: str) -> str:
         """Generate context based on detected emotion"""
         emotion_contexts = {
-            "happy": "The user seems happy and positive right now.",
-            "sad": "The user appears to be feeling sad or down at the moment.",
-            "angry": "The user seems frustrated or angry currently.",
-            "fear": "The user appears anxious or worried.",
-            "surprise": "The user seems surprised or startled.",
-            "disgust": "The user appears displeased or disgusted.",
-            "neutral": "The user has a neutral emotional state."
+            "happy": f"IMPORTANT: The emotion detector currently shows the user's highest detected emotion is HAPPY. The user seems happy and positive right now.",
+            "sad": f"IMPORTANT: The emotion detector currently shows the user's highest detected emotion is SAD. The user appears to be feeling sad or down at the moment.",
+            "angry": f"IMPORTANT: The emotion detector currently shows the user's highest detected emotion is ANGRY. The user seems frustrated or angry currently.",
+            "fear": f"IMPORTANT: The emotion detector currently shows the user's highest detected emotion is FEAR. The user appears anxious or worried.",
+            "surprise": f"IMPORTANT: The emotion detector currently shows the user's highest detected emotion is SURPRISE. The user seems surprised or startled.",
+            "disgust": f"IMPORTANT: The emotion detector currently shows the user's highest detected emotion is DISGUST. The user appears displeased or disgusted.",
+            "neutral": f"IMPORTANT: The emotion detector currently shows the user's highest detected emotion is NEUTRAL. The user has a neutral emotional state."
         }
         
-        return emotion_contexts.get(emotion, "")
+        return emotion_contexts.get(emotion, f"IMPORTANT: The emotion detector currently shows the user's highest detected emotion is {emotion.upper()}.")
     
     def send_message(self, message: str, detected_emotion: Optional[str] = None) -> str:
         """
@@ -184,19 +184,17 @@ class GeminiChatbot:
             return "⚠️ Gemini AI is not available. Please check your API key configuration."
         
         try:
-            # Update current emotion
+            # Always update current emotion if provided (use latest detected emotion)
             if detected_emotion:
                 self.current_emotion = detected_emotion
             
-            # Build context-aware prompt
+            # Build context-aware prompt - ALWAYS include current emotion
             personality_prompt = self._get_personality_prompt()
             emotion_context = self._get_emotion_context(self.current_emotion)
             
-            # Only add emotion context on first message or when emotion changes
-            if len(self.conversation_history) == 0 or detected_emotion:
-                full_message = f"{personality_prompt}\n{emotion_context}\n\nUser: {message}"
-            else:
-                full_message = message
+            # Always include emotion context so chatbot knows current emotional state
+            # Include personality and emotion context with every message
+            full_message = f"{personality_prompt}\n{emotion_context}\n\nUser: {message}"
             
             # Send message and get response
             response = self.chat.send_message(full_message)
