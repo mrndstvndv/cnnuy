@@ -106,6 +106,12 @@ class EmotionDetectionApp(ctk.CTk):
         self.is_voice_recording = False
         self.voice_thread = None
         
+        # Voice silence detection
+        self.voice_stopped = False
+        self.voice_stop_time = None
+        self.voice_analysis_delay = 2.0  # seconds to wait after voice stops
+        self.silence_threshold = 500  # audio energy threshold for silence detection
+        
         # Countdown timer for screenshots
         self.countdown_active = False
         self.countdown_value = 0
@@ -968,6 +974,8 @@ class EmotionDetectionApp(ctk.CTk):
             return
         
         self.voice_processing = False
+        self.voice_stopped = False
+        self.voice_stop_time = None
         self.voice_stop_event = threading.Event()
         self.status_label.configure(text="⏱️ Get ready for voice recording...")
         
@@ -990,13 +998,13 @@ class EmotionDetectionApp(ctk.CTk):
             except Exception as e:
                 print(f"Error saving screenshot: {e}")
             
-            # Now start voice recording
+            # Now start voice recording with silence detection
             self.is_voice_recording = True
             self.status_label.configure(text="🎤 Listening...")
             self.add_chat_message("🎤 Voice recording started... Speak now!", "system", color="blue")
             
             def listen():
-                text = self.detector.listen_voice(duration=10)  # Listen for up to 10 seconds
+                text = self._listen_with_silence_detection(duration=10)
                 
                 if text:
                     # Show transcription
@@ -1008,6 +1016,8 @@ class EmotionDetectionApp(ctk.CTk):
                     self.add_chat_message("❌ No speech detected or could not understand", "system", color="red")
                 
                 self.is_voice_recording = False
+                self.voice_stopped = False
+                self.voice_stop_time = None
                 self.status_label.configure(text="Ready")
                 if hasattr(self, 'voice_btn'):
                     self.voice_btn.configure(state="normal")
@@ -1017,6 +1027,145 @@ class EmotionDetectionApp(ctk.CTk):
         
         # Start 3-second countdown before capturing and recording
         self.start_countdown(capture_and_record, seconds=3)
+    
+    def _listen_with_silence_detection(self, duration: int = 10) -> Optional[str]:
+        """
+        Listen to microphone with real-time silence detection and hand gesture monitoring.
+        If voice stops and hand is still up, wait 2 seconds before analyzing.
+        """
+        if not self.detector.recognizer or not SPEECH_RECOGNITION_AVAILABLE:
+            return None
+        
+        try:
+            import audioop
+            
+            with sr.Microphone() as source:
+                print("🎤 Listening... Speak now!")
+                self.detector.recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                
+                # Start time for timeout
+                start_time = time.time()
+                audio_frames = []
+                speaking_detected = False
+                silence_start = None
+                
+                while time.time() - start_time < duration:
+                    try:
+                        # Listen in small chunks to detect silence
+                        audio_chunk = self.detector.recognizer.listen(
+                            source, 
+                            timeout=1, 
+                            phrase_time_limit=1
+                        )
+                        
+                        # Calculate audio energy to detect if speaking
+                        audio_data = audio_chunk.get_raw_data()
+                        energy = audioop.rms(audio_data, audio_chunk.sample_width)
+                        
+                        # Detect if currently speaking
+                        is_speaking = energy > self.silence_threshold
+                        
+                        if is_speaking:
+                            speaking_detected = True
+                            silence_start = None
+                            self.voice_stopped = False
+                            audio_frames.append(audio_chunk)
+                            print(f"🎤 Speaking... (energy: {energy})")
+                        else:
+                            # Silence detected
+                            if speaking_detected and not self.voice_stopped:
+                                # User stopped speaking
+                                print("🤫 Silence detected")
+                                self.voice_stopped = True
+                                silence_start = time.time()
+                                self.voice_stop_time = silence_start
+                                
+                                # Update status
+                                self.after(0, lambda: self.status_label.configure(
+                                    text="🤫 Voice stopped - checking hand..."
+                                ))
+                                self.after(0, lambda: self.add_chat_message(
+                                    "🤫 Voice stopped. Checking if hand is still up...", 
+                                    "system", 
+                                    color="yellow"
+                                ))
+                            
+                            # Check if we're in the waiting period
+                            if self.voice_stopped and silence_start:
+                                elapsed_silence = time.time() - silence_start
+                                
+                                # Check if hand is still up (palm or pointing gesture)
+                                hand_still_up = self.current_gesture in ["open_palm", "palm_horizontal", "pointing"]
+                                
+                                if hand_still_up:
+                                    # Hand is still up, continue waiting
+                                    remaining = self.voice_analysis_delay - elapsed_silence
+                                    if remaining > 0:
+                                        self.after(0, lambda r=remaining: self.status_label.configure(
+                                            text=f"✋ Hand up - analyzing in {r:.1f}s..."
+                                        ))
+                                        time.sleep(0.1)
+                                    else:
+                                        # 2 seconds passed with hand still up - analyze now
+                                        print("✅ 2 seconds passed with hand up - analyzing audio")
+                                        self.after(0, lambda: self.add_chat_message(
+                                            "✅ Hand still up after 2 seconds - analyzing audio...", 
+                                            "system", 
+                                            color="green"
+                                        ))
+                                        break
+                                else:
+                                    # Hand went down, stop waiting and analyze immediately
+                                    print("👋 Hand went down - analyzing audio now")
+                                    self.after(0, lambda: self.add_chat_message(
+                                        "👋 Hand lowered - analyzing audio now...", 
+                                        "system", 
+                                        color="cyan"
+                                    ))
+                                    break
+                        
+                    except sr.WaitTimeoutError:
+                        # No audio in this chunk, continue
+                        if not speaking_detected:
+                            continue
+                        else:
+                            # Treat as silence if we were speaking before
+                            if not self.voice_stopped:
+                                print("🤫 Timeout - treating as silence")
+                                self.voice_stopped = True
+                                silence_start = time.time()
+                                self.voice_stop_time = silence_start
+                
+                # Combine all audio chunks
+                if not audio_frames:
+                    print("⏱️ No speech detected")
+                    return None
+                
+                # Combine audio data
+                print("🔄 Processing speech...")
+                combined_data = b''.join([frame.get_raw_data() for frame in audio_frames])
+                combined_audio = sr.AudioData(
+                    combined_data,
+                    audio_frames[0].sample_rate,
+                    audio_frames[0].sample_width
+                )
+                
+                # Recognize speech
+                text = self.detector.recognizer.recognize_google(combined_audio)
+                print(f"📝 Recognized: {text}")
+                return text
+                
+        except sr.UnknownValueError:
+            print("❌ Could not understand audio")
+            return None
+        except sr.RequestError as e:
+            print(f"❌ Speech recognition error: {e}")
+            return None
+        except Exception as e:
+            print(f"❌ Error: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
     
     def _send_voice_message_to_ai(self, message: str):
         """Send voice-transcribed message to AI and get response with TTS"""
