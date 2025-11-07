@@ -107,13 +107,12 @@ class EmotionDetector:
         self.session_data = []
         self.session_start = datetime.now()
         
-        # Emotion smoothing (temporal filtering)
-        self.emotion_history = []
-        self.smoothing_window = 10  # Increased from 5 to 10 for more stability
-        self.current_smoothed_emotions = None
-        
-        # Confidence threshold for emotion detection
-        self.confidence_threshold = 0.3  # Lower threshold for better detection
+        # Face detection stabilization
+        self.face_history = []  # Track face positions over time
+        self.face_stability_window = 5  # Number of frames to track
+        self.min_face_confirmations = 3  # Minimum frames before accepting face
+        self.last_stable_face = None  # Last confirmed stable face position
+        self.face_confirmation_count = 0  # How many consecutive frames face was detected
     
     def _load_emotion_model(self):
         """Load the trained emotion detection model"""
@@ -208,7 +207,7 @@ class EmotionDetector:
         }
     
     def detect_faces(self, frame: np.ndarray) -> List[Tuple[int, int, int, int]]:
-        """Detect faces in a frame with improved parameters for glasses"""
+        """Detect faces in a frame with improved stability and parameters for glasses"""
         if self.face_cascade.empty():
             return []
         
@@ -217,30 +216,118 @@ class EmotionDetector:
         # Apply histogram equalization for better detection with glasses
         gray = cv2.equalizeHist(gray)
         
-        # Adjusted parameters for better detection with glasses
+        # Apply slight Gaussian blur to reduce noise
+        gray = cv2.GaussianBlur(gray, (5, 5), 0)
+        
+        # Improved parameters for stable detection with glasses
         faces = self.face_cascade.detectMultiScale(
             gray,
-            scaleFactor=1.05,  # Smaller steps for better accuracy
-            minNeighbors=3,    # Lower threshold for glasses
-            minSize=(60, 60),  # Larger minimum size
+            scaleFactor=1.1,   # More stable than 1.05
+            minNeighbors=5,    # Increased from 3 to reduce false positives
+            minSize=(80, 80),  # Larger minimum size for better stability
             flags=cv2.CASCADE_SCALE_IMAGE
         )
         
-        return faces
+        # Apply temporal filtering for stability
+        stabilized_faces = self._stabilize_face_detection(faces)
+        
+        return stabilized_faces
+    
+    def _stabilize_face_detection(self, faces: List[Tuple[int, int, int, int]]) -> List[Tuple[int, int, int, int]]:
+        """Apply temporal filtering to stabilize face detection"""
+        if len(faces) == 0:
+            # No face detected in current frame
+            self.face_confirmation_count = max(0, self.face_confirmation_count - 1)
+            
+            # If we had a stable face, keep showing it for a few frames
+            if self.last_stable_face is not None and self.face_confirmation_count > 0:
+                return [self.last_stable_face]
+            else:
+                self.last_stable_face = None
+                return []
+        
+        # Face(s) detected - take the largest one (closest to camera)
+        largest_face = max(faces, key=lambda f: f[2] * f[3])
+        
+        # Add to history
+        self.face_history.append(largest_face)
+        if len(self.face_history) > self.face_stability_window:
+            self.face_history.pop(0)
+        
+        # Check if this face is stable (similar to recent detections)
+        if len(self.face_history) >= self.min_face_confirmations:
+            # Calculate average position and size from recent history
+            if self._is_face_stable(largest_face):
+                self.face_confirmation_count = min(10, self.face_confirmation_count + 1)
+                
+                # Update stable face with smoothed position
+                smoothed_face = self._get_smoothed_face()
+                self.last_stable_face = smoothed_face
+                return [smoothed_face]
+        
+        # Not enough confirmation yet
+        if self.last_stable_face is not None and self.face_confirmation_count > 0:
+            # Continue showing last stable face during transition
+            return [self.last_stable_face]
+        
+        return []
+    
+    def _is_face_stable(self, current_face: Tuple[int, int, int, int]) -> bool:
+        """Check if current face is consistent with recent history"""
+        if len(self.face_history) < 2:
+            return False
+        
+        x, y, w, h = current_face
+        
+        # Calculate average position and size from history
+        avg_x = sum(f[0] for f in self.face_history) / len(self.face_history)
+        avg_y = sum(f[1] for f in self.face_history) / len(self.face_history)
+        avg_w = sum(f[2] for f in self.face_history) / len(self.face_history)
+        avg_h = sum(f[3] for f in self.face_history) / len(self.face_history)
+        
+        # Check if current face is close to average (within 30% tolerance)
+        x_diff = abs(x - avg_x) / avg_w if avg_w > 0 else 1
+        y_diff = abs(y - avg_y) / avg_h if avg_h > 0 else 1
+        w_diff = abs(w - avg_w) / avg_w if avg_w > 0 else 1
+        h_diff = abs(h - avg_h) / avg_h if avg_h > 0 else 1
+        
+        # Face is stable if position and size are within tolerance
+        tolerance = 0.3
+        return (x_diff < tolerance and y_diff < tolerance and 
+                w_diff < tolerance and h_diff < tolerance)
+    
+    def _get_smoothed_face(self) -> Tuple[int, int, int, int]:
+        """Get smoothed face position from recent history"""
+        if not self.face_history:
+            return (0, 0, 0, 0)
+        
+        # Use weighted average with more weight on recent frames
+        weights = np.exp(np.linspace(-1, 0, len(self.face_history)))
+        weights = weights / weights.sum()
+        
+        x = int(sum(f[0] * w for f, w in zip(self.face_history, weights)))
+        y = int(sum(f[1] * w for f, w in zip(self.face_history, weights)))
+        w = int(sum(f[2] * w for f, w in zip(self.face_history, weights)))
+        h = int(sum(f[3] * w for f, w in zip(self.face_history, weights)))
+        
+        return (x, y, w, h)
     
     def predict_emotion(self, face_img: np.ndarray) -> Dict[str, float]:
         """
-        Predict emotion from face image with temporal smoothing
+        Predict emotion from face image using raw model predictions
         """
         if self.emotion_model is not None:
             try:
                 # Preprocess face image for model
                 # Most emotion models expect 48x48 grayscale input
-                face_processed = cv2.resize(face_img, (48, 48))
+                face_processed = cv2.resize(face_img, (48, 48), interpolation=cv2.INTER_AREA)
                 
                 # Convert to grayscale if needed
                 if len(face_processed.shape) == 3:
                     face_processed = cv2.cvtColor(face_processed, cv2.COLOR_BGR2GRAY)
+                
+                # Apply histogram equalization for better contrast
+                face_processed = cv2.equalizeHist(face_processed)
                 
                 # Normalize pixel values
                 face_processed = face_processed.astype('float32') / 255.0
@@ -252,32 +339,21 @@ class EmotionDetector:
                 # Get prediction
                 predictions = self.emotion_model.predict(face_processed, verbose=0)[0]
                 
-                # Create emotion dictionary
-                current_emotions = {
+                # Create emotion dictionary - raw model output
+                emotions = {
                     emotion: float(prob) 
                     for emotion, prob in zip(self.emotions, predictions)
                 }
                 
+                return emotions
+                
             except Exception as e:
                 print(f"⚠️ Model prediction error: {e}")
                 # Fallback to neutral
-                current_emotions = {emotion: 1.0/len(self.emotions) for emotion in self.emotions}
+                return {emotion: 1.0/len(self.emotions) for emotion in self.emotions}
         else:
             # Fallback: analyze face brightness/contrast for basic emotion hints
-            current_emotions = self._simple_emotion_heuristic(face_img)
-        
-        # Add to history
-        self.emotion_history.append(current_emotions)
-        
-        # Keep only recent history
-        if len(self.emotion_history) > self.smoothing_window:
-            self.emotion_history.pop(0)
-        
-        # Apply smoothing (moving average with exponential weighting)
-        smoothed_emotions = self._smooth_emotions()
-        self.current_smoothed_emotions = smoothed_emotions
-        
-        return smoothed_emotions
+            return self._simple_emotion_heuristic(face_img)
     
     def _simple_emotion_heuristic(self, face_img: np.ndarray) -> Dict[str, float]:
         """Simple emotion detection based on image properties (fallback)"""
@@ -285,32 +361,6 @@ class EmotionDetector:
         emotions = {emotion: 0.1 for emotion in self.emotions}
         emotions["neutral"] = 0.4
         return emotions
-    
-    def _smooth_emotions(self) -> Dict[str, float]:
-        """Apply temporal smoothing to emotion predictions with exponential weighting"""
-        if not self.emotion_history:
-            return {emotion: 1.0/len(self.emotions) for emotion in self.emotions}
-        
-        # Use exponential moving average - recent frames have more weight
-        # This provides stability while still being responsive
-        smoothed = {}
-        
-        # Create weights that decay exponentially (more recent = higher weight)
-        num_frames = len(self.emotion_history)
-        weights = np.exp(np.linspace(-2, 0, num_frames))  # Exponential decay
-        weights = weights / weights.sum()  # Normalize
-        
-        for emotion in self.emotions:
-            values = np.array([frame[emotion] for frame in self.emotion_history])
-            # Weighted average
-            smoothed[emotion] = float(np.sum(values * weights))
-        
-        # Normalize to sum to 1
-        total = sum(smoothed.values())
-        if total > 0:
-            smoothed = {k: v/total for k, v in smoothed.items()}
-        
-        return smoothed
     
     def analyze_text(self, text: str) -> Dict:
         """Analyze emotion in text using keyword matching"""

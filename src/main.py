@@ -96,6 +96,11 @@ class EmotionDetectionApp(ctk.CTk):
         self.is_voice_recording = False
         self.voice_thread = None
         
+        # Countdown timer for screenshots
+        self.countdown_active = False
+        self.countdown_value = 0
+        self.countdown_callback = None
+        
         # ElevenLabs TTS
         self.elevenlabs_api_key = self.detector.config.get("elevenlabs_api_key", "")
         self.is_speaking = False
@@ -378,28 +383,6 @@ class EmotionDetectionApp(ctk.CTk):
             bar.set(0)
             self.emotion_bars[emotion] = bar
         
-        # Smoothing control
-        smoothing_frame = ctk.CTkFrame(bars_container, fg_color="transparent")
-        smoothing_frame.pack(fill="x", pady=10)
-        
-        ctk.CTkLabel(
-            smoothing_frame, text="Smoothing:",
-            font=("Arial", 11, "bold")
-        ).pack(side="left", padx=5)
-        
-        self.smoothing_slider = ctk.CTkSlider(
-            smoothing_frame, from_=1, to=20, number_of_steps=19,
-            command=self.update_smoothing, width=150
-        )
-        self.smoothing_slider.set(10)  # Default increased to 10
-        self.smoothing_slider.pack(side="left", padx=5)
-        
-        self.smoothing_label = ctk.CTkLabel(
-            smoothing_frame, text="10 frames",
-            font=("Arial", 10), width=70
-        )
-        self.smoothing_label.pack(side="left")
-        
         # Voice button
         if self.detector.recognizer:
             self.voice_btn = ctk.CTkButton(
@@ -599,7 +582,7 @@ class EmotionDetectionApp(ctk.CTk):
                         # Get face region
                         face_roi = frame[y:y+h, x:x+w]
                         
-                        # Predict emotion (with smoothing)
+                        # Predict emotion (raw model output)
                         emotions = self.detector.predict_emotion(face_roi)
                         
                         # Get dominant emotion
@@ -656,6 +639,10 @@ class EmotionDetectionApp(ctk.CTk):
     
     def display_frame(self, frame):
         """Display video frame in GUI"""
+        # Add countdown overlay if active
+        if self.countdown_active and self.countdown_value > 0:
+            frame = self._add_countdown_overlay(frame.copy())
+        
         # Convert BGR to RGB
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         
@@ -672,11 +659,69 @@ class EmotionDetectionApp(ctk.CTk):
         self.video_label.configure(image=ctk_img, text="")
         self.video_label.image = ctk_img  # Keep a reference
     
-    def update_smoothing(self, value):
-        """Update emotion smoothing window"""
-        smoothing_value = int(value)
-        self.detector.smoothing_window = smoothing_value
-        self.smoothing_label.configure(text=f"{smoothing_value} frames")
+    def _add_countdown_overlay(self, frame):
+        """Add countdown number overlay to frame"""
+        h, w = frame.shape[:2]
+        
+        # Semi-transparent overlay
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.3, frame, 0.7, 0, frame)
+        
+        # Countdown text
+        countdown_text = str(self.countdown_value)
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 8
+        thickness = 20
+        
+        # Get text size
+        (text_width, text_height), baseline = cv2.getTextSize(countdown_text, font, font_scale, thickness)
+        
+        # Center position
+        x = (w - text_width) // 2
+        y = (h + text_height) // 2
+        
+        # Draw text with outline
+        cv2.putText(frame, countdown_text, (x, y), font, font_scale, (0, 0, 0), thickness + 8)
+        cv2.putText(frame, countdown_text, (x, y), font, font_scale, (0, 255, 255), thickness)
+        
+        # "Get Ready" text
+        ready_text = "GET READY!"
+        ready_font_scale = 2
+        ready_thickness = 3
+        (ready_width, ready_height), _ = cv2.getTextSize(ready_text, font, ready_font_scale, ready_thickness)
+        ready_x = (w - ready_width) // 2
+        ready_y = y - text_height - 50
+        
+        cv2.putText(frame, ready_text, (ready_x, ready_y), font, ready_font_scale, (0, 0, 0), ready_thickness + 4)
+        cv2.putText(frame, ready_text, (ready_x, ready_y), font, ready_font_scale, (255, 255, 0), ready_thickness)
+        
+        return frame
+    
+    def start_countdown(self, callback, seconds=3):
+        """Start countdown timer before capturing screenshot"""
+        if self.countdown_active:
+            return  # Already counting down
+        
+        self.countdown_active = True
+        self.countdown_value = seconds
+        self.countdown_callback = callback
+        
+        def countdown_tick():
+            if self.countdown_value > 0:
+                # Update countdown
+                self.countdown_value -= 1
+                # Schedule next tick
+                self.after(1000, countdown_tick)
+            else:
+                # Countdown finished - execute callback
+                self.countdown_active = False
+                if self.countdown_callback:
+                    self.countdown_callback()
+                    self.countdown_callback = None
+        
+        # Start countdown
+        countdown_tick()
     
     def update_gesture_display(self, gesture: str):
         """Update gesture label with emoji, motion, and action description"""
@@ -865,37 +910,61 @@ class EmotionDetectionApp(ctk.CTk):
         )
     
     def voice_input(self):
-        """Capture voice input and send to AI chatbot"""
-        if self.is_voice_recording:
-            return  # Already recording
+        """Capture voice input and send to AI chatbot with countdown and screenshot"""
+        if self.is_voice_recording or self.countdown_active:
+            return  # Already recording or counting down
         
-        self.is_voice_recording = True
-        self.status_label.configure(text="🎤 Listening...")
+        if self.current_frame is None:
+            messagebox.showwarning("Warning", "No frame available. Start detection first.")
+            return
+        
+        self.status_label.configure(text="⏱️ Get ready for voice recording...")
         if hasattr(self, 'voice_btn'):
             self.voice_btn.configure(state="disabled")
         
-        # Show in chat
-        self.add_chat_message("🎤 Voice recording started... Speak now!", "system", color="blue")
+        # Show countdown message
+        self.add_chat_message("⏱️ Get ready! Screenshot will be taken in 3 seconds...", "system", color="blue")
         
-        def listen():
-            text = self.detector.listen_voice(duration=10)  # Listen for up to 10 seconds
+        def capture_and_record():
+            """Capture screenshot then start voice recording"""
+            # Save screenshot to exports
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            screenshot_path = EXPORTS_DIR / f"voice_analysis_{timestamp}.png"
             
-            if text:
-                # Show transcription
-                self.add_chat_message(f"📝 You said: {text}", "user")
+            try:
+                cv2.imwrite(str(screenshot_path), self.current_frame)
+                print(f"📸 Screenshot saved: {screenshot_path}")
+                self.add_chat_message(f"📸 Screenshot saved: {screenshot_path.name}", "system", color="green")
+            except Exception as e:
+                print(f"Error saving screenshot: {e}")
+            
+            # Now start voice recording
+            self.is_voice_recording = True
+            self.status_label.configure(text="🎤 Listening...")
+            self.add_chat_message("🎤 Voice recording started... Speak now!", "system", color="blue")
+            
+            def listen():
+                text = self.detector.listen_voice(duration=10)  # Listen for up to 10 seconds
                 
-                # Send to chatbot automatically
-                self.after(100, lambda: self._send_voice_message_to_ai(text))
-            else:
-                self.add_chat_message("❌ No speech detected or could not understand", "system", color="red")
+                if text:
+                    # Show transcription
+                    self.add_chat_message(f"📝 You said: {text}", "user")
+                    
+                    # Send to chatbot automatically
+                    self.after(100, lambda: self._send_voice_message_to_ai(text))
+                else:
+                    self.add_chat_message("❌ No speech detected or could not understand", "system", color="red")
+                
+                self.is_voice_recording = False
+                self.status_label.configure(text="Ready")
+                if hasattr(self, 'voice_btn'):
+                    self.voice_btn.configure(state="normal")
             
-            self.is_voice_recording = False
-            self.status_label.configure(text="Ready")
-            if hasattr(self, 'voice_btn'):
-                self.voice_btn.configure(state="normal")
+            self.voice_thread = threading.Thread(target=listen, daemon=True)
+            self.voice_thread.start()
         
-        self.voice_thread = threading.Thread(target=listen, daemon=True)
-        self.voice_thread.start()
+        # Start 3-second countdown before capturing and recording
+        self.start_countdown(capture_and_record, seconds=3)
     
     def _send_voice_message_to_ai(self, message: str):
         """Send voice-transcribed message to AI and get response with TTS"""
@@ -1212,17 +1281,30 @@ class EmotionDetectionApp(ctk.CTk):
             messagebox.showerror("Error", f"Failed to analyze image: {str(e)}")
     
     def analyze_current_frame(self):
-        """Analyze the current webcam frame with Gemini AI"""
+        """Analyze the current webcam frame with Gemini AI after countdown"""
         if self.current_frame is None:
             messagebox.showwarning("Warning", "No frame available. Start detection first.")
             return
         
-        self.status_label.configure(text="🤖 AI analyzing frame...")
+        if self.countdown_active:
+            return  # Already counting down
+        
+        self.status_label.configure(text="⏱️ Get ready for AI analysis...")
         self.ai_vision_btn.configure(state="disabled")
         
-        def analyze():
+        def capture_and_analyze():
+            """Capture screenshot and analyze after countdown"""
+            # Save screenshot to exports
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            screenshot_path = EXPORTS_DIR / f"ai_analysis_{timestamp}.png"
+            
             try:
-                # Analyze the current frame
+                cv2.imwrite(str(screenshot_path), self.current_frame)
+                print(f"📸 Screenshot saved: {screenshot_path}")
+                
+                self.status_label.configure(text="🤖 AI analyzing frame...")
+                
+                # Analyze the captured frame
                 response = self.chatbot.analyze_frame(
                     self.current_frame,
                     f"Describe what you see in this image. Focus on the person's facial expression, "
@@ -1230,7 +1312,7 @@ class EmotionDetectionApp(ctk.CTk):
                 )
                 
                 # Add to chat
-                self.add_chat_message(f"📹 Webcam Analysis:\n{response}", "ai")
+                self.add_chat_message(f"📹 Webcam Analysis (saved to {screenshot_path.name}):\n{response}", "ai")
                 self.status_label.configure(text="✅ Analysis complete")
                 
             except Exception as e:
@@ -1241,8 +1323,8 @@ class EmotionDetectionApp(ctk.CTk):
             finally:
                 self.ai_vision_btn.configure(state="normal")
         
-        # Run in background thread
-        threading.Thread(target=analyze, daemon=True).start()
+        # Start 3-second countdown
+        self.start_countdown(capture_and_analyze, seconds=3)
     
     def toggle_gesture_visibility(self):
         """Show/hide gesture points button when gesture detection is toggled"""
